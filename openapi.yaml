@@ -1,0 +1,641 @@
+openapi: 3.0.3
+info:
+  title: Tasks API
+  version: 1.0.0
+  description: |
+    API REST de gerenciamento de tarefas por usuário.
+
+    Fluxo básico:
+
+    1. Crie uma conta em `POST /auth/register` ou entre com `POST /auth/login`.
+    2. Use o `token` retornado no cabeçalho `Authorization: Bearer <token>`.
+    3. Gerencie suas tarefas em `/tasks`. Cada usuário só enxerga as próprias tarefas;
+       tentar acessar a tarefa de outra pessoa responde `404`.
+
+    Todos os erros seguem o formato `{ "error": { "code", "message", "details?" } }`.
+  contact:
+    name: Anwar Quirino
+    url: https://github.com/anwarquirino
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:3000
+    description: Ambiente local
+
+tags:
+  - name: health
+    description: Verificação de saúde do serviço
+  - name: auth
+    description: Registro, login e perfil do usuário autenticado
+  - name: tasks
+    description: Tarefas do usuário autenticado
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Verifica se a API e o banco estão respondendo
+      operationId: getHealth
+      responses:
+        '200':
+          description: API e banco de dados operacionais
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+                database: up
+                uptime: 128
+                timestamp: '2026-10-10T12:00:00.000Z'
+        '503':
+          description: Banco de dados indisponível
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: degraded
+                database: down
+                uptime: 128
+                timestamp: '2026-10-10T12:00:00.000Z'
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Cria uma conta e devolve um token de acesso
+      description: |
+        O e-mail é normalizado (espaços removidos e letras minúsculas) antes de ser salvo.
+        A senha é armazenada apenas como hash bcrypt e nunca aparece nas respostas.
+        Rota limitada por IP (ver `AUTH_RATE_LIMIT_*`).
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterInput'
+            example:
+              name: Ana Souza
+              email: ana@example.com
+              password: senha-forte-123
+      responses:
+        '201':
+          description: Usuário criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: Já existe um usuário com este e-mail (`EMAIL_ALREADY_IN_USE`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: EMAIL_ALREADY_IN_USE
+                  message: Já existe um usuário com este e-mail
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Autentica com e-mail e senha e devolve um token de acesso
+      description: |
+        E-mail desconhecido e senha incorreta produzem exatamente a mesma resposta
+        (`INVALID_CREDENTIALS`), para não revelar quais e-mails estão cadastrados.
+        Rota limitada por IP (ver `AUTH_RATE_LIMIT_*`).
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInput'
+            example:
+              email: ana@example.com
+              password: senha-forte-123
+      responses:
+        '200':
+          description: Autenticado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: E-mail ou senha incorretos (`INVALID_CREDENTIALS`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: E-mail ou senha incorretos
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Devolve o perfil do usuário autenticado
+      operationId: getProfile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Perfil do usuário
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks:
+    get:
+      tags: [tasks]
+      summary: Lista as tarefas do usuário com filtros, paginação e ordenação
+      operationId: listTasks
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          description: Filtra pelo status
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+        - name: priority
+          in: query
+          description: Filtra pela prioridade
+          schema:
+            $ref: '#/components/schemas/TaskPriority'
+        - name: page
+          in: query
+          description: Página (começa em 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Itens por página
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: sortBy
+          in: query
+          description: Campo de ordenação. Prioridade ordena por low < medium < high.
+          schema:
+            type: string
+            enum: [createdAt, updatedAt, dueDate, priority, title]
+            default: createdAt
+        - name: order
+          in: query
+          description: Direção da ordenação
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        '200':
+          description: Página de tarefas
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskList'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [tasks]
+      summary: Cria uma tarefa para o usuário autenticado
+      operationId: createTask
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskInput'
+            example:
+              title: Estudar Drizzle ORM
+              description: Ler a documentação de migrations
+              priority: high
+              dueDate: '2026-10-20T18:00:00-03:00'
+      responses:
+        '201':
+          description: Tarefa criada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [tasks]
+      summary: Busca uma tarefa pelo id
+      operationId: getTask
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Tarefa encontrada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+    patch:
+      tags: [tasks]
+      summary: Atualiza parcialmente uma tarefa
+      description: Envie apenas os campos que deseja alterar. Use `null` em `description` ou `dueDate` para limpá-los.
+      operationId: updateTask
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTaskInput'
+            example:
+              status: done
+              dueDate: null
+      responses:
+        '200':
+          description: Tarefa atualizada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+    delete:
+      tags: [tasks]
+      summary: Remove uma tarefa
+      operationId: deleteTask
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Tarefa removida
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/TaskNotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token obtido em `/auth/register` ou `/auth/login`.
+
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      description: Identificador (UUID) da tarefa
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: |
+        Token ausente (`UNAUTHORIZED`), inválido ou de usuário inexistente (`INVALID_TOKEN`)
+        ou vencido (`TOKEN_EXPIRED`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: Token de acesso ausente
+    ValidationError:
+      description: Dados inválidos (`VALIDATION_ERROR`) ou JSON malformado (`INVALID_JSON`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Dados inválidos
+              details:
+                - path: title
+                  message: O título é obrigatório
+    TaskNotFound:
+      description: Tarefa inexistente ou pertencente a outro usuário (`TASK_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: TASK_NOT_FOUND
+              message: Tarefa não encontrada
+    TooManyRequests:
+      description: Limite de tentativas por IP excedido (`TOO_MANY_REQUESTS`)
+      headers:
+        RateLimit:
+          description: Estado atual do limite (IETF draft-8)
+          schema:
+            type: string
+        RateLimit-Policy:
+          description: Política de limite aplicada
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: TOO_MANY_REQUESTS
+              message: Muitas tentativas. Tente novamente em alguns minutos.
+
+  schemas:
+    Health:
+      type: object
+      required: [status, database, uptime, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        database:
+          type: string
+          enum: [up, down]
+        uptime:
+          type: integer
+          description: Segundos desde que o processo iniciou
+        timestamp:
+          type: string
+          format: date-time
+
+    RegisterInput:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+
+    LoginInput:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    User:
+      type: object
+      required: [id, name, email, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        createdAt:
+          type: string
+          format: date-time
+      example:
+        id: 7d1a1b7e-0c2f-4b57-9b0f-3f2a0b2c9d11
+        name: Ana Souza
+        email: ana@example.com
+        createdAt: '2026-10-10T12:00:00.000Z'
+
+    AuthResponse:
+      type: object
+      required: [user, token]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          type: string
+          description: JWT (HS256) para usar como bearer token
+      example:
+        user:
+          id: 7d1a1b7e-0c2f-4b57-9b0f-3f2a0b2c9d11
+          name: Ana Souza
+          email: ana@example.com
+          createdAt: '2026-10-10T12:00:00.000Z'
+        token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiI3ZDFhMWI3ZSIsImlzcyI6InRhc2tzLWFwaSJ9.assinatura
+
+    TaskStatus:
+      type: string
+      enum: [pending, in_progress, done]
+
+    TaskPriority:
+      type: string
+      enum: [low, medium, high]
+
+    Task:
+      type: object
+      required: [id, userId, title, description, status, priority, dueDate, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        title:
+          type: string
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        priority:
+          $ref: '#/components/schemas/TaskPriority'
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      example:
+        id: 2f9a0c4e-6b1d-4f3a-8e2b-1c0d9e8f7a65
+        userId: 7d1a1b7e-0c2f-4b57-9b0f-3f2a0b2c9d11
+        title: Estudar Drizzle ORM
+        description: Ler a documentação de migrations
+        status: pending
+        priority: high
+        dueDate: '2026-10-20T21:00:00.000Z'
+        createdAt: '2026-10-10T12:00:00.000Z'
+        updatedAt: '2026-10-10T12:00:00.000Z'
+
+    CreateTaskInput:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          allOf:
+            - $ref: '#/components/schemas/TaskStatus'
+          default: pending
+        priority:
+          allOf:
+            - $ref: '#/components/schemas/TaskPriority'
+          default: medium
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: Data ISO 8601 com fuso horário (ex. `2026-12-31T23:59:00-03:00`)
+
+    UpdateTaskInput:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        description:
+          type: string
+          nullable: true
+          maxLength: 2000
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        priority:
+          $ref: '#/components/schemas/TaskPriority'
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+
+    PaginationMeta:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+          description: Total de tarefas que atendem aos filtros
+        totalPages:
+          type: integer
+
+    TaskList:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    ErrorDetail:
+      type: object
+      required: [path, message]
+      properties:
+        path:
+          type: string
+          description: Campo com problema (ex. `title`, `email`, `limit`)
+        message:
+          type: string
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Código estável para tratamento programático
+              enum:
+                - VALIDATION_ERROR
+                - INVALID_JSON
+                - PAYLOAD_TOO_LARGE
+                - BAD_REQUEST
+                - UNAUTHORIZED
+                - INVALID_TOKEN
+                - TOKEN_EXPIRED
+                - INVALID_CREDENTIALS
+                - EMAIL_ALREADY_IN_USE
+                - NOT_FOUND
+                - TASK_NOT_FOUND
+                - USER_NOT_FOUND
+                - TOO_MANY_REQUESTS
+                - INTERNAL_ERROR
+            message:
+              type: string
+              description: Mensagem em português voltada a pessoas
+            details:
+              type: array
+              description: Presente apenas em erros de validação
+              items:
+                $ref: '#/components/schemas/ErrorDetail'
