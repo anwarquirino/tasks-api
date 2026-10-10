@@ -15,7 +15,9 @@ const envSchema = z
         error: 'DATABASE_URL deve ser uma URL postgres:// ou postgresql:// válida',
       })
       .optional(),
-    JWT_SECRET: z.string().min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
+    JWT_SECRET: z
+      .string({ error: 'JWT_SECRET é obrigatória' })
+      .min(32, 'JWT_SECRET deve ter pelo menos 32 caracteres'),
     JWT_EXPIRES_IN: z
       .string()
       .regex(/^\d+[smhd]$/, 'JWT_EXPIRES_IN deve seguir o formato 15m, 1h ou 7d')
