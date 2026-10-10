@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import './zod-locale.js';
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 
