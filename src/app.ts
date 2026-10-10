@@ -3,17 +3,19 @@ import express, { type Express } from 'express';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import type { Env } from './config/env.js';
+import type { Database } from './db/index.js';
 import { createLogger, type Logger } from './lib/logger.js';
 import { errorHandler, notFoundHandler } from './middlewares/error-handler.js';
 import { createHealthRouter } from './modules/health/health.routes.js';
 
 export interface AppDeps {
   env: Env;
+  db: Database;
   logger?: Logger;
 }
 
 /** Builds the Express app without listening, so tests can drive it with supertest. */
-export function createApp({ env, logger = createLogger(env) }: AppDeps): Express {
+export function createApp({ env, db, logger = createLogger(env) }: AppDeps): Express {
   const app = express();
 
   app.disable('x-powered-by');
@@ -26,7 +28,7 @@ export function createApp({ env, logger = createLogger(env) }: AppDeps): Express
   );
   app.use(express.json({ limit: '100kb' }));
 
-  app.use('/health', createHealthRouter());
+  app.use('/health', createHealthRouter(db));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
