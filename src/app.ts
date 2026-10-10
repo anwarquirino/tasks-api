@@ -11,6 +11,7 @@ import { createAuthMiddleware } from './middlewares/auth.js';
 import { errorHandler, notFoundHandler } from './middlewares/error-handler.js';
 import { createAuthRouter } from './modules/auth/auth.routes.js';
 import { createHealthRouter } from './modules/health/health.routes.js';
+import { createTasksRouter } from './modules/tasks/tasks.routes.js';
 
 export interface AppDeps {
   env: Env;
@@ -36,6 +37,7 @@ export function createApp({ env, db, logger = createLogger(env) }: AppDeps): Exp
 
   app.use('/health', createHealthRouter(db));
   app.use('/auth', createAuthRouter({ db, env, jwt, authenticate }));
+  app.use('/tasks', authenticate, createTasksRouter(db));
 
   app.use(notFoundHandler);
   app.use(errorHandler);
